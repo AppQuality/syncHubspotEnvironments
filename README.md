@@ -6,7 +6,7 @@ Synchronize data with HubSpot using Node.js.
 
 This utility provides functions to interact with the HubSpot API, enabling synchronization of contacts and companies from your local data sources.
 
-Sync Contacts, Companies, Deals from a STANDARD Environment to a DEVELOPER Environment on Hubspot
+Sync structure for Contacts, Companies, Deals from a STANDARD Environment to a DEVELOPER Environment on Hubspot
 
 ## Features
 

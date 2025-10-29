@@ -55,12 +55,12 @@ async function cloneProperties(objectType) {
 
     try {
       console.log(`${objectType.toUpperCase()} - Field group: ${group.name}`);
-      await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, payloadGroup, {
-        headers: {
-          Authorization: `Bearer ${STAGING_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      // await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, payloadGroup, {
+      //   headers: {
+      //     Authorization: `Bearer ${STAGING_TOKEN}`,
+      //     'Content-Type': 'application/json'
+      //   }
+      // });
     } catch (err) {
       // check if error is 4XX
        if (err.response && err.response.status >= 400 && err.response.status < 500) {
@@ -82,16 +82,18 @@ async function cloneProperties(objectType) {
   for (const prop of sourceProps.data.results) {
     // Skip default properties
     if (prop.archived || prop.createdUserId === null) continue;
+    // if prop.name start with hs_ skip it
+    if (prop.name.startsWith('hs_')) continue;
 
     const payloadEntity = {
       name: prop.name,
       label: prop.label,
       type: prop.type,
-      fieldType: prop.fieldType,
+      fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
       groupName: prop.groupName,
-      options: prop.options || [],
+      options: prop.options.length > 0 ? prop.options : [ { label: 'default', value: 'default' } ],
       description: prop.description || '',
-      // displayOrder: prop.displayOrder || 0,
+      displayOrder: prop.displayOrder || 1,
       hidden: false,
       formField: prop.formField || false
     };
@@ -107,14 +109,40 @@ async function cloneProperties(objectType) {
     } catch (err) {
       // check if error is 4XX
       if (err.response && err.response.status >= 400 && err.response.status < 500) {
-        // console.error(`❌${objectType} property ${prop.name} - STATUS: ${err.response.status}`, err.response.data, payloadEntity);
+        if (err.response.status === 400) {
+          console.log(`${objectType} property already exists: ${prop.name}`);
+          // console log the error
+          console.log(`STATUS: ${err.response.status}`, err.response.data, payloadEntity);
+          // debug
+          return;
+        }else{
+          // console.log(`⚠️${objectType} property ${prop.name} - STATUS: ${err.response.status}`, err.response.data, payloadEntity);
         continue;
+        }
       }
       else {
         console.error(`❌ Failed to create ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
       }
     }
   }
+}
+
+function mapValidFieldTypeToV3(type, fieldType) {
+  // Map field types to valid HubSpot v3 field types
+  const fieldTypeMap = {
+    'date': 'date',
+    'datetime': 'date',
+    'object_coordinates': 'text',
+    'json': 'text',
+    'number': 'number',
+    'string': 'text',
+    'bool': 'booleancheckbox',
+    'enumeration': ['booleancheckbox','radio', 'select', 'checkbox', 'calculation_equation'].includes(fieldType) ? fieldType : 'checkbox',
+  };
+  if (!fieldTypeMap[type]) {
+    return 'text';
+  }
+  return fieldTypeMap[type];
 }
 
 async function main() {

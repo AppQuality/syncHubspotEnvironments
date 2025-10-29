@@ -25,52 +25,46 @@ async function cloneProperties(objectType) {
 
   // Fetch properties from source portal to developer portal
   const fieldProps = await getProperties(objectType);
+  const stagingPropertiesNames = await getPropertiesNamesSTAGE(objectType);
 
-  // for (const prop of fieldProps.data.results) {
-  //   if (prop.archived || prop.createdUserId === null) continue;
-  //   if (prop.name.startsWith('hs_')) continue;
+  for (const prop of fieldProps.results) {
+    if (prop.archived || prop.createdUserId === null) continue;
+    if (prop.name.startsWith('hs_')) continue;
+    if (prop.hubspotDefined) continue;
 
-  //   const payloadProperty = {
-  //     name: prop.name,
-  //     label: prop.label,
-  //     type: prop.type,
-  //     fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
-  //     groupName: prop.groupName,
-  //     options: prop.options.length > 0 ? prop.options : [ { label: 'default', value: 'default' } ],
-  //     description: prop.description || '',
-  //     displayOrder: prop.displayOrder || 1,
-  //     hidden: false,
-  //     formField: prop.formField || false
-  //   };
-
-  //   try {
-  //     await addProperty(objectType, prop, payloadProperty);
-  //   } catch (err) {
-  //     if (err.response && err.response.status >= 400 && err.response.status < 500) {
-  //       if (err.response.status === 400) {
-  //         console.log(`${objectType} property already exists: ${prop.name}`);
-  //         console.log(`STATUS: ${err.response.status}`, err.response.data, payloadProperty);
-  //         return;
-  //       }else{
-  //         // console.log(`⚠️${objectType} property ${prop.name} - STATUS: ${err.response.status}`, err.response.data, payloadEntity);
-  //       continue;
-  //       }
-  //     }
-  //     else {
-  //       console.error(`❌ Failed to create ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
-  //     }
-  //   }
-  // }
+    if (stagingPropertiesNames.includes(prop.name)) {
+      await updatePropertySTAGE(prop, objectType);
+    } else {
+      await addPropertySTAGE(prop, objectType);
+    }
+  }
 }
 
-async function addProperty(prop, payloadProperty, objectType) {
-   console.log(`${objectType.toUpperCase()} - Property: ${prop.name}`);
-      await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}`, payloadProperty, {
+async function addPropertySTAGE(prop, objectType) {
+  console.log(`${objectType.toUpperCase()} - property ${prop.groupName} DOES NOT EXIST - Creating...`);
+
+      const payloadProperty = {
+      name: prop.name,
+      label: prop.label,
+      type: prop.type,
+      fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
+      groupName: prop.groupName,
+      options: prop.options.length > 0 ? prop.options : [ { label: 'default', value: 'default' } ],
+      description: prop.description || '',
+      displayOrder: prop.displayOrder || 1,
+      hidden: false,
+      formField: prop.formField || false
+    };
+    try {
+       await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}`, payloadProperty, {
         headers: {
           Authorization: `Bearer ${STAGING_TOKEN}`,
           'Content-Type': 'application/json'
         }
       });
+    } catch (err) {
+        console.error(`❌ Failed to create ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+    }
 }
 
 async function addPropertyGroupSTAGE(group, objectType) {
@@ -97,6 +91,7 @@ async function addPropertyGroupSTAGE(group, objectType) {
     }
 }
 
+
 async function updatePropertyGroupSTAGE(group, objectType) {
       console.log(`${objectType.toUpperCase()} - property group ${group.name} EXISTS - Updating...`);
       const payloadGroup = {
@@ -115,6 +110,31 @@ async function updatePropertyGroupSTAGE(group, objectType) {
     }
 }
 
+async function updatePropertySTAGE(prop, objectType) {
+      console.log(`${objectType.toUpperCase()} - property ${prop.name} EXISTS - Updating...`);
+     const payloadProperty = {
+      name: prop.name,
+      label: prop.label,
+      type: prop.type,
+      fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
+      groupName: prop.groupName,
+      ...prop.options.length > 0 && { options:  prop.options },
+      description: prop.description || '',
+      displayOrder: prop.displayOrder || 1,
+      formField: prop.formField || false
+    };
+    try {
+       await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/${prop.name}`, payloadProperty, {
+        headers: {
+          Authorization: `Bearer ${STAGING_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+    } catch (err) {
+       console.error(`❌ Failed to update ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+    }
+}
+
 async function getGroupsPROD(objectType) {
   const response = await axios.get(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, {
     headers: { Authorization: `Bearer ${PROD_TOKEN}` }
@@ -127,6 +147,13 @@ async function getGroupsNamesSTAGE(objectType) {
     headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
   });
   return response.data.results.map((group)=> group.name);
+}
+
+async function getPropertiesNamesSTAGE(objectType) {
+  const response = await axios.get(`https://api.hubapi.com/crm/v3/properties/${objectType}`, {
+    headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
+  });
+  return response.data.results.map((property)=> property.name);
 }
 
 async function getProperties(objectType) {

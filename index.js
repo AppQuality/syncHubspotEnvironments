@@ -5,7 +5,6 @@ const { PROD_TOKEN, STAGING_TOKEN } = require('./constants');
 const OBJECTS = ['contacts', 'companies', 'deals'];
 
 async function cloneProperties(objectType) {
- 
   await checkTokens();
 
   // Fetch groups from source portal to developer portal
@@ -17,7 +16,7 @@ async function cloneProperties(objectType) {
     if (group.default) continue;
 
     if (stagingGroupsNames.includes(group.name)) {
-      await updatePropertyGroupSTAGE(group,objectType);
+      await updatePropertyGroupSTAGE(group, objectType);
     } else {
       await addPropertyGroupSTAGE(objectType, group);
     }
@@ -29,9 +28,8 @@ async function cloneProperties(objectType) {
 
   for (const prop of fieldProps.results) {
     if (prop.archived || prop.createdUserId === null) continue;
-    if (prop.name.startsWith('hs_')) continue;
     if (prop.hubspotDefined) continue;
-
+    
     if (stagingPropertiesNames.includes(prop.name)) {
       await updatePropertySTAGE(prop, objectType);
     } else {
@@ -43,96 +41,79 @@ async function cloneProperties(objectType) {
 async function addPropertySTAGE(prop, objectType) {
   console.log(`${objectType.toUpperCase()} - property ${prop.groupName} DOES NOT EXIST - Creating...`);
 
-      const payloadProperty = {
-      name: prop.name,
-      label: prop.label,
-      type: prop.type,
-      fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
-      groupName: prop.groupName,
-      options: prop.options.length > 0 ? prop.options : [ { label: 'default', value: 'default' } ],
-      description: prop.description || '',
-      displayOrder: prop.displayOrder || 1,
-      hidden: false,
-      formField: prop.formField || false
-    };
-    try {
-       await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}`, payloadProperty, {
-        headers: {
-          Authorization: `Bearer ${STAGING_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
-    } catch (err) {
-        console.error(`❌ Failed to create ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
-    }
+  const payloadProperty = {
+    ...prop,
+    fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
+    options: prop.options.length > 0 ? prop.options : [{ label: 'default', value: 'default' }],
+  };
+
+  try {
+    await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}`, payloadProperty, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (err) {
+    console.error(`❌ Failed to create ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
 }
 
 async function addPropertyGroupSTAGE(group, objectType) {
-      console.log(`${objectType.toUpperCase()} - property group ${group.name} DOES NOT EXIST - Creating...`);
-      const payloadGroup = {
-       name: group.name,
-       label: group.label,
-       displayOrder: group.displayOrder,
-       archived: false
-    };
-    try {
-       await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, payloadGroup, {
-        headers: {
-          Authorization: `Bearer ${STAGING_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
-    } catch (err) {
-       if (err.response && err.response.status >= 400 && err.response.status < 500) {
-        //TODO if error is 409 (conflict prop exist - probably is hubspot default prop)  update groupName, description etc as on production
-      } else {
-          console.error(`❌ Failed to create ${objectType} field group: ${group.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  console.log(`${objectType.toUpperCase()} - property group ${group.name} DOES NOT EXIST - Creating...`);
+  const payloadGroup = {
+    ...group,
+  };
+  try {
+    await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, payloadGroup, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
       }
-    }
+    });
+  } catch (err) {
+    console.error(`❌ Failed to create ${objectType} field group: ${group.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
 }
 
-
 async function updatePropertyGroupSTAGE(group, objectType) {
-      console.log(`${objectType.toUpperCase()} - property group ${group.name} EXISTS - Updating...`);
-      const payloadGroup = {
-       label: group.label,
-       displayOrder: group.displayOrder
-    };
-    try {
-       await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups/${group.name}`, payloadGroup, {
-        headers: {
-          Authorization: `Bearer ${STAGING_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
-    } catch (err) {
-       console.error(`❌ Failed to update ${objectType} field group: ${group.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
-    }
+  console.log(`${objectType.toUpperCase()} - property group ${group.name} EXISTS - Updating...`);
+
+  const payloadGroup = {
+    ...group,
+  };
+
+  try {
+    await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups/${group.name}`, payloadGroup, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (err) {
+    console.error(`❌ Failed to update ${objectType} field group: ${group.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
 }
 
 async function updatePropertySTAGE(prop, objectType) {
-      console.log(`${objectType.toUpperCase()} - property ${prop.name} EXISTS - Updating...`);
-     const payloadProperty = {
-      name: prop.name,
-      label: prop.label,
-      type: prop.type,
-      fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
-      groupName: prop.groupName,
-      ...prop.options.length > 0 && { options:  prop.options },
-      description: prop.description || '',
-      displayOrder: prop.displayOrder || 1,
-      formField: prop.formField || false
-    };
-    try {
-       await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/${prop.name}`, payloadProperty, {
-        headers: {
-          Authorization: `Bearer ${STAGING_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
-    } catch (err) {
-       console.error(`❌ Failed to update ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
-    }
+  console.log(`${objectType.toUpperCase()} - property ${prop.name} EXISTS - Updating...`);
+
+  const payloadProperty = {
+    ...prop,
+    fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
+    ...(prop.options.length > 0 && { options: prop.options }),
+  };
+
+  try {
+    await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/${prop.name}`, payloadProperty, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (err) {
+    console.error(`❌ Failed to update ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
 }
 
 async function getGroupsPROD(objectType) {
@@ -146,14 +127,14 @@ async function getGroupsNamesSTAGE(objectType) {
   const response = await axios.get(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, {
     headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
   });
-  return response.data.results.map((group)=> group.name);
+  return response.data.results.map((group) => group.name);
 }
 
 async function getPropertiesNamesSTAGE(objectType) {
   const response = await axios.get(`https://api.hubapi.com/crm/v3/properties/${objectType}`, {
     headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
   });
-  return response.data.results.map((property)=> property.name);
+  return response.data.results.map((property) => property.name);
 }
 
 async function getProperties(objectType) {
@@ -173,17 +154,19 @@ function mapValidFieldTypeToV3(type, fieldType) {
     'number': 'number',
     'string': 'text',
     'bool': 'booleancheckbox',
-    'enumeration': ['booleancheckbox','radio', 'select', 'checkbox', 'calculation_equation'].includes(fieldType) ? fieldType : 'checkbox',
+    'enumeration': ['booleancheckbox', 'radio', 'select', 'checkbox', 'calculation_equation'].includes(fieldType) ? fieldType : 'checkbox',
   };
+
   if (!fieldTypeMap[type]) {
     return 'text';
   }
+
   return fieldTypeMap[type];
 }
 
 
 async function checkTokens() {
-   // Check the "accountType" property to determine if the token is correct
+  // Check the "accountType" property to determine if the token is correct
   // accountType = "STANDARD" | "DEVELOPER_TEST" | "SANDBOX" | "APP_DEVELOPER" (STANDARD indicates a production account)
 
   const checkTokenProd = await axios.get(`https://api.hubapi.com/account-info/v3/details`, {
@@ -194,7 +177,8 @@ async function checkTokens() {
   });
 
   if (!checkTokenProd.status === 200 || !checkTokenProd.data.accountType || checkTokenProd.data.accountType !== 'STANDARD') {
-    throw new Error('The PROD_TOKEN does not belong to a production account.');
+    console.error('The PROD_TOKEN does not belong to a production account', checkTokenProd.data.accountType);
+    throw new Error('The PROD_TOKEN does not belong to a production account');
   }
 
   const checkTokenStaging = await axios.get(`https://api.hubapi.com/account-info/v3/details`, {
@@ -213,6 +197,7 @@ async function checkTokens() {
       && checkTokenStaging.data.accountType !== 'APP_DEVELOPER'
     )
   ) {
+    console.error('The STAGING_TOKEN does not belong to a sandbox account', checkTokenStaging.data.accountType);
     throw new Error('The STAGING_TOKEN does not belong to a sandbox account.');
   }
 }

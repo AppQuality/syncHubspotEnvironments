@@ -28,11 +28,11 @@ async function cloneProperties(objectType) {
 
   for (const prop of fieldProps.results) {
     if (prop.archived || prop.createdUserId === null) continue;
-    if (prop.hubspotDefined) continue;
-    
+
     if (stagingPropertiesNames.includes(prop.name)) {
       await updatePropertySTAGE(prop, objectType);
     } else {
+      if (prop.hubspotDefined) continue;
       await addPropertySTAGE(prop, objectType);
     }
   }
@@ -98,11 +98,20 @@ async function updatePropertyGroupSTAGE(group, objectType) {
 async function updatePropertySTAGE(prop, objectType) {
   console.log(`${objectType.toUpperCase()} - property ${prop.name} EXISTS - Updating...`);
 
-  const payloadProperty = {
-    ...prop,
-    fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
-    ...(prop.options.length > 0 && { options: prop.options }),
-  };
+  let payloadProperty = {};
+
+  if (prop.hubspotDefined) {
+    payloadProperty = {
+      label: prop.label,
+      ...(prop.options.length > 0 && { options: prop.options }),
+    };
+  } else {
+    payloadProperty = {
+      ...prop,
+      fieldType: mapValidFieldTypeToV3(prop.type, prop.fieldType),
+      ...(prop.options.length > 0 && { options: prop.options }),
+    };
+  }
 
   try {
     await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/${prop.name}`, payloadProperty, {

@@ -2,43 +2,123 @@ const axios = require('axios');
 
 const { PROD_TOKEN, STAGING_TOKEN } = require('./constants');
 
-const OBJECTS = ['contacts', 'companies', 'deals'];
+const OBJECTS = ['contacts', 'companies', 'deals']; // :objectType to sync
+const SYNC_ENABLED = {
+  propertyGroups: false,
+  properties: false,
+  pipelines: true,
+}; // Enable/disable sync of :objectType entities
 
 async function cloneProperties(objectType) {
   await checkTokens();
 
-  // Fetch groups from source portal to developer portal
-  const fieldPropsGroups = await getGroupsPROD(objectType);
-  const stagingGroupsNames = await getGroupsNamesSTAGE(objectType);
+  /* --- Property Groups --- */
 
-  for (const group of fieldPropsGroups.results) {
-    // Skip default groups
-    if (group.default) continue;
+  // Check if sync of property groups is enabled
+  if (SYNC_ENABLED.propertyGroups) {
+    console.log(`Syncing property groups for ${objectType.toUpperCase()}`);
 
-    if (stagingGroupsNames.includes(group.name)) {
-      await updatePropertyGroupSTAGE(group, objectType);
-    } else {
-      await addPropertyGroupSTAGE(objectType, group);
+    // Fetch groups from source portal to developer portal
+    const fieldPropsGroups = await getGroupsPROD(objectType);
+    const stagingGroupsNames = await getGroupsNamesSTAGING(objectType);
+
+    for (const group of fieldPropsGroups.results) {
+      // Skip default groups
+      if (group.default) continue;
+
+      if (stagingGroupsNames.includes(group.name)) {
+        await updatePropertyGroupSTAGING(group, objectType);
+      } else {
+        await addPropertyGroupSTAGING(objectType, group);
+      }
     }
+  } else {
+    console.log(`Skipping property groups sync for ${objectType.toUpperCase()}`);
   }
 
-  // Fetch properties from source portal to developer portal
-  const fieldProps = await getProperties(objectType);
-  const stagingPropertiesNames = await getPropertiesNamesSTAGE(objectType);
+  /* --- Properties --- */
 
-  for (const prop of fieldProps.results) {
-    if (prop.archived || prop.createdUserId === null) continue;
-    if (prop.hubspotDefined) continue;
-    
-    if (stagingPropertiesNames.includes(prop.name)) {
-      await updatePropertySTAGE(prop, objectType);
-    } else {
-      await addPropertySTAGE(prop, objectType);
+  // Check if sync of properties is enabled
+  if (SYNC_ENABLED.properties) {
+    console.log(`Syncing properties for ${objectType.toUpperCase()}`);
+
+    // Fetch properties from source portal to developer portal
+    const fieldProps = await getProperties(objectType);
+    const stagingPropertiesNames = await getPropertiesNamesSTAGING(objectType);
+
+    for (const prop of fieldProps.results) {
+      if (prop.archived || prop.createdUserId === null) continue;
+      if (prop.hubspotDefined) continue;
+
+      if (stagingPropertiesNames.includes(prop.name)) {
+        await updatePropertySTAGING(prop, objectType);
+      } else {
+        await addPropertySTAGING(prop, objectType);
+      }
     }
+  } else {
+    console.log(`Skipping properties sync for ${objectType.toUpperCase()}`);
+  }
+
+  /* --- Pipelines --- */
+
+  // Check if sync of pipelines is enabled
+  if (SYNC_ENABLED.pipelines) {
+    console.log(`Syncing pipelines for ${objectType.toUpperCase()}`);
+
+    // Fetch pipelines from source portal to developer portal
+    const pipelines = await getPipelines(objectType);
+    const stagingPipelines = await getPipelinesSTAGING(objectType);
+
+    for (const pipeline of pipelines.results) {
+      console.log(`Processing pipeline ${pipeline.id}...`);
+
+      // Sync only default pipeline for each objectType
+      if (objectType === "deals" && pipeline.id !== "default") continue;
+      if (objectType === "contacts" && pipeline.id !== "contacts-lifecycle-pipeline") continue;
+      if (objectType === "companies" && pipeline.id !== "companies-lifecycle-pipeline") continue;
+      
+      if (pipeline.archived) continue;
+
+      // Sync pipeline
+      if (stagingPipelines.includes(pipeline.id)) {
+        await updatePipelineSTAGING(pipeline, objectType);
+      } else {
+        await addPipelineSTAGING(pipeline, objectType);
+      }
+
+      // Sync stages
+      const stages = await getPipelineStages(pipeline, objectType);
+      const stagingStages = await getPipelineStagesSTAGING(pipeline, objectType);
+
+      // Clean up stages in staging pipeline that do not exist in prod pipeline
+      for (const stagingStage of stagingStages.results) {
+        const stageExistsInProd = stages.results.some(s => s.id === stagingStage.id);
+        if (!stageExistsInProd) {
+          // Delete stage
+          await deletePipelineStageSTAGING(stagingStage, pipeline, objectType);
+        }
+      }
+
+      // Create stages
+      for (const stage of stages.results) {
+        if (stage.archived) continue;
+
+        const stageExistsInStaging = stagingStages.results.some(s => s.id === stage.id);
+
+        if (stageExistsInStaging) {
+          await updatePipelineStageSTAGING(stage, pipeline, objectType);
+        } else {
+          await addPipelineStageSTAGING(stage, pipeline, objectType);
+        }
+      }
+    }
+  } else {
+    console.log(`Skipping pipelines sync for ${objectType.toUpperCase()}`);
   }
 }
 
-async function addPropertySTAGE(prop, objectType) {
+async function addPropertySTAGING(prop, objectType) {
   console.log(`${objectType.toUpperCase()} - property ${prop.groupName} DOES NOT EXIST - Creating...`);
 
   const payloadProperty = {
@@ -48,35 +128,47 @@ async function addPropertySTAGE(prop, objectType) {
   };
 
   try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
     await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}`, payloadProperty, {
       headers: {
         Authorization: `Bearer ${STAGING_TOKEN}`,
         'Content-Type': 'application/json'
       }
     });
+
+    console.log(`✅ Successfully created ${objectType} property: ${prop.name}`);
   } catch (err) {
     console.error(`❌ Failed to create ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
   }
 }
 
-async function addPropertyGroupSTAGE(group, objectType) {
+async function addPropertyGroupSTAGING(group, objectType) {
   console.log(`${objectType.toUpperCase()} - property group ${group.name} DOES NOT EXIST - Creating...`);
   const payloadGroup = {
     ...group,
   };
   try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
     await axios.post(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, payloadGroup, {
       headers: {
         Authorization: `Bearer ${STAGING_TOKEN}`,
         'Content-Type': 'application/json'
       }
     });
+
+    console.log(`✅ Successfully created ${objectType} property group: ${group.name}`);
   } catch (err) {
     console.error(`❌ Failed to create ${objectType} field group: ${group.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
   }
 }
 
-async function updatePropertyGroupSTAGE(group, objectType) {
+async function updatePropertyGroupSTAGING(group, objectType) {
   console.log(`${objectType.toUpperCase()} - property group ${group.name} EXISTS - Updating...`);
 
   const payloadGroup = {
@@ -84,18 +176,24 @@ async function updatePropertyGroupSTAGE(group, objectType) {
   };
 
   try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
     await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups/${group.name}`, payloadGroup, {
       headers: {
         Authorization: `Bearer ${STAGING_TOKEN}`,
         'Content-Type': 'application/json'
       }
     });
+
+    console.log(`✅ Successfully updated ${objectType} property group: ${group.name}`);
   } catch (err) {
     console.error(`❌ Failed to update ${objectType} field group: ${group.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
   }
 }
 
-async function updatePropertySTAGE(prop, objectType) {
+async function updatePropertySTAGING(prop, objectType) {
   console.log(`${objectType.toUpperCase()} - property ${prop.name} EXISTS - Updating...`);
 
   const payloadProperty = {
@@ -105,12 +203,18 @@ async function updatePropertySTAGE(prop, objectType) {
   };
 
   try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
     await axios.patch(`https://api.hubapi.com/crm/v3/properties/${objectType}/${prop.name}`, payloadProperty, {
       headers: {
         Authorization: `Bearer ${STAGING_TOKEN}`,
         'Content-Type': 'application/json'
       }
     });
+
+    console.log(`✅ Successfully updated ${objectType} property: ${prop.name}`);
   } catch (err) {
     console.error(`❌ Failed to update ${objectType} property: ${prop.name}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
   }
@@ -123,14 +227,14 @@ async function getGroupsPROD(objectType) {
   return response.data;
 }
 
-async function getGroupsNamesSTAGE(objectType) {
+async function getGroupsNamesSTAGING(objectType) {
   const response = await axios.get(`https://api.hubapi.com/crm/v3/properties/${objectType}/groups`, {
     headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
   });
   return response.data.results.map((group) => group.name);
 }
 
-async function getPropertiesNamesSTAGE(objectType) {
+async function getPropertiesNamesSTAGING(objectType) {
   const response = await axios.get(`https://api.hubapi.com/crm/v3/properties/${objectType}`, {
     headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
   });
@@ -142,6 +246,170 @@ async function getProperties(objectType) {
     headers: { Authorization: `Bearer ${PROD_TOKEN}` }
   });
   return response.data;
+}
+
+async function getPipelines(objectType) {
+  const response = await axios.get(`https://api.hubapi.com/crm/v3/pipelines/${objectType}`, {
+    headers: { Authorization: `Bearer ${PROD_TOKEN}` }
+  });
+  return response.data;
+}
+
+async function getPipelinesSTAGING(objectType) {
+  const response = await axios.get(`https://api.hubapi.com/crm/v3/pipelines/${objectType}`, {
+    headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
+  });
+  return response.data.results.map((pipeline) => pipeline.id);
+}
+
+async function updatePipelineSTAGING(pipeline, objectType) {
+  console.log(`${objectType.toUpperCase()} - pipeline ${pipeline.id} EXISTS - Updating...`);
+
+  const payloadPipeline = {
+    displayOrder: pipeline.displayOrder,
+    label: pipeline.label,
+  };
+
+  try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
+    await axios.patch(`https://api.hubapi.com/crm/v3/pipelines/${objectType}/${pipeline.id}`, payloadPipeline, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    console.log(`✅ Successfully updated ${objectType} pipeline: ${pipeline.id}`);
+  } catch (err) {
+    console.error(`❌ Failed to update ${objectType} pipeline: ${pipeline.id}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
+}
+
+async function addPipelineSTAGING(pipeline, objectType) {
+  console.log(`${objectType.toUpperCase()} - pipeline ${pipeline.id} DOES NOT EXIST - Creating...`);
+
+  const payloadPipeline = {
+    displayOrder: pipeline.displayOrder,
+    label: pipeline.label,
+    stages: [
+      // Default stage to avoid empty stages error
+      {
+        label: 'Default Stage',
+        displayOrder: 0,
+        metadata: {
+          // Insert required metadata based on object type
+          ...(objectType === 'deals' ? { probability: 0.0 } : {}),
+          ...(objectType === 'tickets' ? { ticketState: "OPEN" } : {}),
+        }
+      }
+    ],
+  };
+
+  try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
+    await axios.post(`https://api.hubapi.com/crm/v3/pipelines/${objectType}`, payloadPipeline, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    console.log(`✅ Successfully created pipeline ${pipeline.id} in ${objectType.toUpperCase()} with a default stage. Please update stages accordingly.`);
+  } catch (err) {
+    console.error(`❌ Failed to create ${objectType} pipeline: ${pipeline.id}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
+}
+
+async function getPipelineStages(pipeline, objectType) {
+  const response = await axios.get(`https://api.hubapi.com/crm/v3/pipelines/${objectType}/${pipeline.id}/stages`, {
+    headers: { Authorization: `Bearer ${PROD_TOKEN}` }
+  });
+  return response.data;
+}
+
+async function getPipelineStagesSTAGING(pipeline, objectType) {
+  const response = await axios.get(`https://api.hubapi.com/crm/v3/pipelines/${objectType}/${pipeline.id}/stages`, {
+    headers: { Authorization: `Bearer ${STAGING_TOKEN}` }
+  });
+  return response.data;
+}
+
+async function addPipelineStageSTAGING(stage, pipeline, objectType) {
+  console.log(`${objectType.toUpperCase()} - pipeline ${pipeline.id} stage ${stage.id} DOES NOT EXIST - Creating...`);
+
+  const payloadStage = {
+    metadata: stage.metadata,
+    displayOrder: stage.displayOrder,
+    label: stage.label,
+  };
+
+  try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
+    await axios.post(`https://api.hubapi.com/crm/v3/pipelines/${objectType}/${pipeline.id}/stages`, payloadStage, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log(`✅ Successfully created ${objectType} pipeline ${pipeline.id} stage: ${stage.id}`);
+  } catch (err) {
+    console.error(`❌ Failed to create ${objectType} pipeline ${pipeline.id} stage: ${stage.id}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
+}
+
+async function updatePipelineStageSTAGING(stage, pipeline, objectType) {
+  console.log(`${objectType.toUpperCase()} - pipeline ${pipeline.id} stage ${stage.id} EXISTS - Updating...`);
+
+  const payloadStage = {
+    metadata: stage.metadata,
+    displayOrder: stage.displayOrder,
+    label: stage.label,
+  };
+
+  try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
+    await axios.patch(`https://api.hubapi.com/crm/v3/pipelines/${objectType}/${pipeline.id}/stages/${stage.id}`, payloadStage, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    console.log(`✅ Successfully updated ${objectType} pipeline ${pipeline.id} stage: ${stage.id}`);
+  } catch (err) {
+    console.error(`❌ Failed to update ${objectType} pipeline ${pipeline.id} stage: ${stage.id}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
+}
+
+async function deletePipelineStageSTAGING(stage, pipeline, objectType) {
+  console.log(`${objectType.toUpperCase()} - pipeline ${pipeline.id} stage ${stage.id} NOT USED - Deleting...`);
+  
+  try {
+    if (!await isTokenSTAGING(STAGING_TOKEN)) {
+      throw new Error('STAGING_TOKEN is not valid for a sandbox/developer account.');
+    }
+
+    await axios.delete(`https://api.hubapi.com/crm/v3/pipelines/${objectType}/${pipeline.id}/stages/${stage.id}`, {
+      headers: {
+        Authorization: `Bearer ${STAGING_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    console.log(`✅ Successfully deleted ${objectType} pipeline ${pipeline.id} stage: ${stage.id}`);
+  } catch (err) {
+    console.error(`❌ Failed to delete ${objectType} pipeline ${pipeline.id} stage: ${stage.id}, STATUS: ${err.response ? err.response.status : 'UNKNOWN'}`, err.response ? err.response.data : err.message);
+  }
 }
 
 function mapValidFieldTypeToV3(type, fieldType) {
@@ -163,7 +431,6 @@ function mapValidFieldTypeToV3(type, fieldType) {
 
   return fieldTypeMap[type];
 }
-
 
 async function checkTokens() {
   // Check the "accountType" property to determine if the token is correct
@@ -202,10 +469,17 @@ async function checkTokens() {
   }
 }
 
+async function isTokenSTAGING(token) {
+  const response = await axios.get(`https://api.hubapi.com/account-info/v3/details`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return response.data.accountType !== 'STANDARD';
+}
+
 async function main() {
   console.log('Syncing process starting...');
   for (const objectType of OBJECTS) {
-    console.log(`Syncing properties for: ${objectType.toUpperCase()}`);
+    console.log(`🛠️ Syncing ${objectType.toUpperCase()}`);
     await cloneProperties(objectType);
   }
 }
